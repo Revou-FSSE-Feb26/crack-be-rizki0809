@@ -13,7 +13,7 @@ import { UpdateUserDto } from './dto/update-user.dto';
 export const BCRYPT_SALT_ROUNDS = 10;
 
 /** Field yang boleh dikirim ke client — password sengaja tidak ada di sini. */
-const safeUserSelect: Prisma.UserSelect = {
+const safeUserSelect = {
   id: true,
   name: true,
   email: true,
@@ -21,7 +21,7 @@ const safeUserSelect: Prisma.UserSelect = {
   role: true,
   createdAt: true,
   updatedAt: true,
-};
+} satisfies Prisma.UserSelect;
 
 @Injectable()
 export class UsersService {
