@@ -5,8 +5,9 @@ import { AppService } from './app.service';
 export class AppController {
   constructor(private readonly appService: AppService) {}
 
+  /** GET /api - health check sederhana. */
   @Get()
-  getHello(): string {
-    return this.appService.getHello();
+  getHealth() {
+    return this.appService.getHealth();
   }
 }
