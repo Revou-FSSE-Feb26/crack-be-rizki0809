@@ -1,17 +1,9 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  Post,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import type { AuthUser } from './types/jwt-payload.type';
 
 @Controller('auth')
@@ -36,8 +28,10 @@ export class AuthController {
     return this.authService.login(dto);
   }
 
-  /** GET /api/auth/me - data akun yang sedang login. Wajib mengirim token. */
-  @UseGuards(JwtAuthGuard)
+  /**
+   * GET /api/auth/me - data akun yang sedang login.
+   * Tidak ditandai @Public(), jadi otomatis butuh token.
+   */
   @Get('me')
   me(@CurrentUser() user: AuthUser) {
     return this.authService.getProfile(user);

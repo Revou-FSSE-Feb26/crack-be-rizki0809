@@ -227,7 +227,32 @@ const orders = [
   },
 ];
 
+/**
+ * Seed diawali dengan menghapus SELURUH isi tabel, jadi kalau tidak sengaja
+ * dijalankan di server produksi, data pelanggan ikut hilang. Pengaman ini
+ * menghentikannya kecuali memang diminta secara eksplisit lewat
+ * ALLOW_PRODUCTION_SEED=true.
+ */
+function assertSafeToSeed() {
+  const isProduction = process.env.NODE_ENV === 'production';
+  const explicitlyAllowed = process.env.ALLOW_PRODUCTION_SEED === 'true';
+
+  if (isProduction && !explicitlyAllowed) {
+    throw new Error(
+      'Seed dibatalkan: NODE_ENV=production. Seed akan MENGHAPUS SEMUA DATA ' +
+        '(user, menu, dan seluruh order). Kalau memang disengaja, jalankan ulang ' +
+        'dengan ALLOW_PRODUCTION_SEED=true.',
+    );
+  }
+
+  if (isProduction) {
+    console.warn('PERINGATAN: menjalankan seed di produksi atas permintaan eksplisit.');
+  }
+}
+
 async function main() {
+  assertSafeToSeed();
+
   console.log('Menghapus data lama...');
   // Urutan penting: hapus dari tabel anak dulu agar tidak melanggar foreign key.
   await prisma.orderItem.deleteMany();

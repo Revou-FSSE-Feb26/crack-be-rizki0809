@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, Role } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -87,11 +87,47 @@ export class UsersService {
     });
   }
 
+  /** Mengubah role user. Hanya dipanggil dari endpoint khusus admin. */
+  async updateRole(id: string, role: Role) {
+    const user = await this.findOne(id);
+
+    if (user.role === Role.ADMIN && role !== Role.ADMIN) {
+      await this.ensureNotLastAdmin(id);
+    }
+
+    return this.prisma.user.update({
+      where: { id },
+      data: { role },
+      select: safeUserSelect,
+    });
+  }
+
   async remove(id: string) {
-    await this.findOne(id);
+    const user = await this.findOne(id);
+
+    if (user.role === Role.ADMIN) {
+      await this.ensureNotLastAdmin(id);
+    }
+
     // Order ikut terhapus lewat onDelete: Cascade di schema.
     await this.prisma.user.delete({ where: { id } });
     return { message: 'User berhasil dihapus' };
+  }
+
+  /**
+   * Menjaga agar selalu ada minimal satu admin. Tanpa ini, menghapus atau
+   * menurunkan admin terakhir akan membuat toko tidak bisa dikelola lagi.
+   */
+  private async ensureNotLastAdmin(id: string) {
+    const otherAdmins = await this.prisma.user.count({
+      where: { role: Role.ADMIN, id: { not: id } },
+    });
+
+    if (otherAdmins === 0) {
+      throw new ConflictException(
+        'Ini satu-satunya akun admin yang tersisa. Buat admin lain dulu sebelum menghapus atau menurunkan akun ini.',
+      );
+    }
   }
 
   private async ensureEmailAvailable(email: string, exceptUserId?: string) {

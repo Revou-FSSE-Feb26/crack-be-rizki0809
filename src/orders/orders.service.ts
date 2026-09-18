@@ -1,9 +1,10 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { OrderStatus, Prisma } from '@prisma/client';
+import { OrderStatus, Prisma, Role } from '@prisma/client';
 import { randomInt } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -15,6 +16,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { QueryOrderDto } from './dto/query-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { UpdatePickupDateDto } from './dto/update-pickup-date.dto';
+import type { AuthUser } from '../auth/types/jwt-payload.type';
 
 /** Relasi yang selalu ikut dikirim bersama order. */
 const orderInclude = {
@@ -55,23 +57,14 @@ const EDITABLE_STATUSES: OrderStatus[] = [
 export class OrdersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateOrderDto) {
+  async create(dto: CreateOrderDto, actor: AuthUser) {
     const pickupDate = this.validatePickupDate(dto.pickupDate);
-
-    const user = await this.prisma.user.findUnique({
-      where: { id: dto.userId },
-    });
-    if (!user) {
-      throw new BadRequestException(
-        `User dengan id ${dto.userId} tidak ditemukan`,
-      );
-    }
 
     const items = await this.buildOrderItems(dto.items);
     const totalPrice = items.reduce((sum, item) => sum + item.subtotal, 0);
 
     return this.createWithUniqueOrderNumber({
-      userId: dto.userId,
+      userId: actor.id,
       pickupDate,
       totalPrice,
       notes: dto.notes,
@@ -79,12 +72,22 @@ export class OrdersService {
     });
   }
 
-  async findAll(query: QueryOrderDto) {
+  async findAll(query: QueryOrderDto, actor: AuthUser) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
     const where: Prisma.OrderWhereInput = {};
-    if (query.userId) where.userId = query.userId;
+
+    if (actor.role === Role.ADMIN) {
+      if (query.userId) where.userId = query.userId;
+    } else {
+      // Customer tidak bisa mengintip order orang lain, sekalipun id-nya ditebak.
+      if (query.userId && query.userId !== actor.id) {
+        throw new ForbiddenException('Kamu hanya bisa melihat ordermu sendiri');
+      }
+      where.userId = actor.id;
+    }
+
     if (query.status) where.status = query.status;
     if (query.pickupDate) {
       where.pickupDate = this.parseOrThrow(query.pickupDate);
@@ -107,7 +110,7 @@ export class OrdersService {
     };
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, actor?: AuthUser) {
     const order = await this.prisma.order.findUnique({
       where: { id },
       include: orderInclude,
@@ -115,17 +118,38 @@ export class OrdersService {
     if (!order) {
       throw new NotFoundException(`Order dengan id ${id} tidak ditemukan`);
     }
+
+    if (actor) {
+      this.assertOwnerOrAdmin(order.userId, actor);
+    }
+
     return order;
   }
 
   /** History order milik satu customer. */
-  findByUser(userId: string, query: QueryOrderDto) {
-    return this.findAll({ ...query, userId });
+  findByUser(userId: string, query: QueryOrderDto, actor: AuthUser) {
+    this.assertOwnerOrAdmin(userId, actor);
+    return this.findAll({ ...query, userId }, actor);
+  }
+
+  /**
+   * Customer hanya boleh menyentuh ordernya sendiri; admin bebas.
+   * Sengaja memakai 403 (bukan 404) karena pemanggil sudah login dan
+   * ordernya memang ada, hanya saja bukan miliknya.
+   */
+  private assertOwnerOrAdmin(ownerId: string, actor: AuthUser) {
+    if (actor.role !== Role.ADMIN && actor.id !== ownerId) {
+      throw new ForbiddenException('Order ini bukan milikmu');
+    }
   }
 
   /** Customer mengganti tanggal pengambilan kue. */
-  async updatePickupDate(id: string, dto: UpdatePickupDateDto) {
-    const order = await this.findOne(id);
+  async updatePickupDate(
+    id: string,
+    dto: UpdatePickupDateDto,
+    actor: AuthUser,
+  ) {
+    const order = await this.findOne(id, actor);
 
     if (!EDITABLE_STATUSES.includes(order.status)) {
       throw new BadRequestException(
@@ -168,8 +192,8 @@ export class OrdersService {
   }
 
   /** Customer membatalkan ordernya sendiri. */
-  async cancel(id: string) {
-    const order = await this.findOne(id);
+  async cancel(id: string, actor: AuthUser) {
+    const order = await this.findOne(id, actor);
 
     if (!EDITABLE_STATUSES.includes(order.status)) {
       throw new BadRequestException(

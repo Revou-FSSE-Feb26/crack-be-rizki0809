@@ -25,14 +25,11 @@ export class OrderItemDto {
   quantity: number;
 }
 
+/**
+ * Tidak ada field `userId` di sini: pemilik order diambil dari token JWT,
+ * supaya tidak ada customer yang bisa memesan atas nama orang lain.
+ */
 export class CreateOrderDto {
-  /**
-   * Sementara dikirim dari body. Setelah JWT dipasang, nilai ini diambil dari
-   * token supaya customer tidak bisa memesan atas nama orang lain.
-   */
-  @IsUUID('4', { message: 'userId harus UUID user yang valid' })
-  userId: string;
-
   /** Tanggal pengambilan, format "YYYY-MM-DD". Minimal H+1 dari hari ini. */
   @Matches(/^\d{4}-\d{2}-\d{2}$/, {
     message: 'pickupDate harus berformat YYYY-MM-DD',
