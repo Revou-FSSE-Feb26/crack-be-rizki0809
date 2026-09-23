@@ -32,14 +32,14 @@ describe('Auth (e2e)', () => {
       const body = response.body as {
         accessToken: string;
         tokenType: string;
-        user: { email: string; role: string };
+        user: Record<string, unknown> & { email: string; role: string };
       };
 
       expect(body.accessToken.split('.')).toHaveLength(3);
       expect(body.tokenType).toBe('Bearer');
       expect(body.user.email).toBe(email);
       expect(body.user.role).toBe('CUSTOMER');
-      expect(JSON.stringify(body)).not.toContain('password');
+      expect(body.user).not.toHaveProperty('password');
     });
 
     it('menolak email yang sudah terdaftar', async () => {
@@ -142,6 +142,82 @@ describe('Auth (e2e)', () => {
         .get('/api/auth/me')
         .set('Authorization', `Bearer ${tampered}`)
         .expect(401);
+    });
+  });
+
+  describe('PATCH /api/users/me/password', () => {
+    const password = 'Rahasia123';
+    const newPassword = 'RahasiaBaru456';
+    let email: string;
+    let token: string;
+
+    beforeAll(async () => {
+      // Akun khusus, supaya penggantian password tidak mengganggu test lain.
+      email = `ganti-password-${Date.now()}@example.com`;
+
+      const response = await request(app.getHttpServer())
+        .post('/api/auth/register')
+        .send({ name: 'Ganti Password', email, password })
+        .expect(201);
+
+      token = (response.body as { accessToken: string }).accessToken;
+    });
+
+    it('menolak tanpa token', async () => {
+      await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .send({ currentPassword: password, newPassword })
+        .expect(401);
+    });
+
+    it('menolak kalau password saat ini salah', async () => {
+      const response = await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: 'SalahBanget', newPassword })
+        // 400, bukan 401: tokennya sah, yang salah isi field-nya. Membalas 401
+        // akan membuat frontend mengira sesinya habis lalu logout otomatis.
+        .expect(400);
+
+      expect((response.body as ApiError).message).toBe(
+        'Password saat ini salah',
+      );
+    });
+
+    it('menolak password baru yang sama dengan yang lama', async () => {
+      const response = await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: password, newPassword: password })
+        .expect(400);
+
+      expect((response.body as ApiError).message).toContain('harus berbeda');
+    });
+
+    it('menolak password baru yang terlalu pendek', async () => {
+      await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: password, newPassword: '123' })
+        .expect(400);
+    });
+
+    it('mengganti password, lalu hanya password baru yang bisa dipakai login', async () => {
+      await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: password, newPassword })
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email, password })
+        .expect(401);
+
+      await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email, password: newPassword })
+        .expect(200);
     });
   });
 

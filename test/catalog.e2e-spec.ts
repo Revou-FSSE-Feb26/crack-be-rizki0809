@@ -188,7 +188,11 @@ describe('Katalog & hak akses (e2e)', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(200);
 
-      expect(JSON.stringify(response.body)).not.toContain('password');
+      // Diperiksa per properti, bukan lewat pencarian teks di seluruh JSON:
+      // email seperti "ganti-password@..." memuat kata itu secara sah.
+      const users = response.body as Record<string, unknown>[];
+      expect(users.length).toBeGreaterThan(0);
+      users.forEach((user) => expect(user).not.toHaveProperty('password'));
     });
   });
 });

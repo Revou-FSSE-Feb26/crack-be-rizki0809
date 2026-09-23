@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -85,6 +86,46 @@ export class UsersService {
       data: dto.email ? { ...dto, email: dto.email.toLowerCase() } : dto,
       select: safeUserSelect,
     });
+  }
+
+  /**
+   * Mengganti password sendiri. Password lama wajib dibuktikan dulu, supaya
+   * perangkat yang ditinggal dalam keadaan login tidak bisa dipakai orang lain
+   * untuk mengambil alih akun.
+   *
+   * Catatan: token yang sudah terbit tetap berlaku sampai kedaluwarsa, karena
+   * JWT bersifat stateless dan belum ada mekanisme pencabutan.
+   */
+  async changePassword(
+    id: string,
+    currentPassword: string,
+    newPassword: string,
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      throw new NotFoundException(`User dengan id ${id} tidak ditemukan`);
+    }
+
+    const matches = await bcrypt.compare(currentPassword, user.password);
+    if (!matches) {
+      // Sengaja 400, bukan 401. Tokennya sendiri sah — yang salah adalah isi
+      // field currentPassword. Membalas 401 akan membuat client mengira
+      // sesinya habis lalu mengeluarkan pengguna dari aplikasi.
+      throw new BadRequestException('Password saat ini salah');
+    }
+
+    if (currentPassword === newPassword) {
+      throw new BadRequestException(
+        'Password baru harus berbeda dari password saat ini',
+      );
+    }
+
+    await this.prisma.user.update({
+      where: { id },
+      data: { password: await UsersService.hashPassword(newPassword) },
+    });
+
+    return { message: 'Password berhasil diganti' };
   }
 
   /** Mengubah role user. Hanya dipanggil dari endpoint khusus admin. */

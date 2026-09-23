@@ -13,6 +13,7 @@ import { Role } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { AuthUser } from '../auth/types/jwt-payload.type';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -36,6 +37,24 @@ export class UsersController {
   @Get()
   findAll() {
     return this.usersService.findAll();
+  }
+
+  /**
+   * PATCH /api/users/me/password — mengganti password sendiri.
+   *
+   * Sengaja dideklarasikan sebelum rute ber-parameter `:id`, karena Nest
+   * mencocokkan rute sesuai urutan penulisan.
+   */
+  @Patch('me/password')
+  changePassword(
+    @Body() dto: ChangePasswordDto,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.usersService.changePassword(
+      actor.id,
+      dto.currentPassword,
+      dto.newPassword,
+    );
   }
 
   @Get(':id')

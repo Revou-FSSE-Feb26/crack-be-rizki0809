@@ -140,6 +140,22 @@ proteksi — kebalikan dari terbuka secara default yang gampang bocor tanpa disa
 
 ---
 
+## Keamanan & ketahanan
+
+| Lapisan | Yang dilakukan |
+| ------- | -------------- |
+| **Helmet** | Memasang header keamanan standar (HSTS, `nosniff`, `X-Frame-Options`). CSP dimatikan karena API ini tidak menyajikan HTML. |
+| **Pembatas laju** | Maksimal 120 request/menit per IP untuk endpoint umum, dan **10/menit untuk login & register** supaya password tidak bisa ditebak berulang-ulang. Melewati batas dibalas `429`. |
+| **`trust proxy`** | Aktif otomatis di produksi. Tanpa ini semua pengunjung terbaca sebagai satu IP di balik proxy hosting, sehingga pembatas laju memblokir mereka bersamaan. |
+| **Graceful shutdown** | Koneksi database ditutup rapi saat container di-restart, bukan diputus di tengah jalan. |
+| **CORS gagal keras** | Di produksi, `CORS_ORIGIN` yang lupa diisi membuat aplikasi menolak start. Kalau dibiarkan diam-diam memakai `localhost`, gejalanya membingungkan: API sehat lewat `curl`, tapi frontend diblokir browser tanpa penjelasan. |
+
+Batasnya bisa disetel lewat `THROTTLE_LIMIT` dan `AUTH_THROTTLE_LIMIT`. Saat menjalankan
+test (`NODE_ENV=test`), batas dibuat sangat longgar supaya rangkaian test yang berkali-kali
+login tidak gagal karena `429`.
+
+---
+
 ## Penanganan error
 
 Semua error — dari validasi, dari service, maupun dari database — melewati satu
@@ -317,6 +333,7 @@ Query string untuk `GET /api/products`:
 | GET    | `/api/users`          | admin            | Daftar user                   |
 | GET    | `/api/users/:id`      | diri sendiri/admin | Detail satu user            |
 | PATCH  | `/api/users/:id`      | diri sendiri/admin | Ubah nama, email, telepon   |
+| PATCH  | `/api/users/me/password` | login         | Ganti password sendiri        |
 | PATCH  | `/api/users/:id/role` | admin            | Ubah role user                |
 | DELETE | `/api/users/:id`      | admin            | Menghapus user                |
 
@@ -430,48 +447,61 @@ untuk hari ini, mengirim `totalPrice` sendiri, menu duplikat, dan lompat status 
 
 ## Deploy
 
-Backend ini disiapkan untuk **Railway** atau **Render**. Keduanya memakai script yang sama:
+Susunan yang dipakai: **aplikasi di Render, database PostgreSQL di Supabase.**
 
-| Tahap | Perintah                                          | Yang terjadi                                        |
-| ----- | ------------------------------------------------- | --------------------------------------------------- |
-| Build | `npm run build`                                   | `prisma generate` lalu `nest build`                  |
-| Start | `npm run start:prod`                              | `prisma migrate deploy` lalu `node dist/main`        |
+```
+Frontend Next.js  ──>  Backend NestJS  ──>  PostgreSQL
+    (Vercel)              (Render)           (Supabase)
+```
+
+Dua perintah yang dipakai Render:
+
+| Tahap | Perintah                              | Yang terjadi                                  |
+| ----- | ------------------------------------- | --------------------------------------------- |
+| Build | `npm ci --include=dev && npm run build` | `prisma generate` lalu `nest build`           |
+| Start | `npm run start:prod`                  | `prisma migrate deploy` lalu `node dist/main` |
 
 `prisma migrate deploy` dipakai (bukan `migrate dev`) karena non-interaktif, tidak butuh
 shadow database, dan **tidak pernah mereset data**. Perintah ini aman dijalankan berkali-kali:
 migrasi yang sudah pernah diterapkan akan dilewati.
 
-### Environment variable yang wajib diisi
+### Langkah 1 — Siapkan database di Supabase
 
-| Variable         | Contoh nilai                                   | Catatan                                       |
-| ---------------- | ---------------------------------------------- | --------------------------------------------- |
-| `DATABASE_URL`   | `postgresql://user:pass@host:5432/hadish_cake` | Dari database yang disediakan platform        |
-| `JWT_SECRET`     | string acak 48 byte                            | **Jangan** pakai nilai yang sama dengan lokal |
-| `JWT_EXPIRES_IN` | `7d`                                           |                                               |
-| `CORS_ORIGIN`    | `https://namadomain-frontend.vercel.app`       | URL frontend produksi, bukan `localhost`      |
-| `NODE_ENV`       | `production`                                   | Mengaktifkan pengaman seed                    |
+1. Buat project baru di Supabase. **Simpan password database** yang kamu buat saat itu —
+   nilainya tidak bisa dilihat lagi nanti, hanya bisa di-reset.
+2. Pilih region yang dekat dengan region Render yang akan kamu pakai. Kalau database di
+   Singapura tapi aplikasi di Oregon, setiap query kena latensi lintas benua.
+3. Buka menu **Connect** (atau **Project Settings → Database**). Di sana ada beberapa bentuk
+   connection string — pilihannya penting:
 
-`PORT` tidak perlu diisi manual — Railway dan Render mengisinya sendiri, dan aplikasi
-sudah membacanya dari `process.env.PORT`.
+| Pilihan                          | Pakai ini? | Alasan                                                                 |
+| -------------------------------- | ---------- | ---------------------------------------------------------------------- |
+| **Session pooler**               | ✅ ya      | Berperilaku seperti koneksi biasa, mendukung migrasi, dan IPv4-friendly |
+| Direct connection                | hati-hati  | Di sebagian project hanya tersedia lewat IPv6, yang belum tentu bisa dijangkau Render |
+| Transaction pooler (port `6543`) | ❌ jangan  | Mode transaksi PgBouncer; `prisma migrate deploy` yang jalan saat start bisa gagal di sini |
 
-Jangan pernah menyetel `ALLOW_PRODUCTION_SEED` di server. Variabel itu satu-satunya cara
-menembus pengaman yang mencegah `npm run db:seed` menghapus seluruh data produksi.
+Ambil connection string **Session pooler**, lalu ganti bagian `[YOUR-PASSWORD]` dengan
+password dari langkah 1.
 
-### Railway
+> **Kalau passwordmu mengandung karakter spesial** (`@`, `#`, `/`, `?`, `:`), karakter itu
+> harus di-*URL encode* dulu, kalau tidak connection string-nya akan terbaca salah.
+> Contoh: `@` menjadi `%40`, `#` menjadi `%23`. Cara paling aman: reset password di Supabase
+> dan pilih yang hanya berisi huruf dan angka.
 
-1. **New Project** → **Provision PostgreSQL**.
-2. **New** → **GitHub Repo** → pilih repo ini.
-3. Di tab **Variables**, isi variabel di atas. Untuk `DATABASE_URL` gunakan referensi
-   `${{Postgres.DATABASE_URL}}` supaya otomatis mengikuti database yang barusan dibuat.
-4. Di **Settings** → **Deploy**, set **Start Command**: `npm run start:prod`.
-   Build command bisa dibiarkan default — Railway sudah menjalankan `npm run build`.
-5. Set **Healthcheck Path** ke `/api`.
+Supabase mewajibkan koneksi SSL. Kalau connection string-nya belum memuat `sslmode`,
+tambahkan sendiri di belakang:
 
-### Render
+```
+postgresql://...pooler.supabase.com:5432/postgres?sslmode=require
+```
 
-1. **New** → **PostgreSQL**, lalu salin **Internal Database URL**.
-2. **New** → **Web Service** → hubungkan repo ini, Runtime **Node**.
-3. **Build Command**:
+Gejala kalau ini terlewat: deploy berhasil, tapi aplikasi gagal start dengan error koneksi
+saat `prisma migrate deploy`.
+
+### Langkah 2 — Buat Web Service di Render
+
+1. **New** → **Web Service** → hubungkan repo ini, Runtime **Node**.
+2. **Build Command**:
 
    ```
    npm ci --include=dev && npm run build
@@ -479,24 +509,210 @@ menembus pengaman yang mencegah `npm run db:seed` menghapus seluruh data produks
 
    `--include=dev` wajib ada. Render menyetel `NODE_ENV=production`, yang membuat npm
    melewati `devDependencies` — padahal `@nestjs/cli` (untuk `nest build`) ada di sana,
-   sehingga build akan gagal tanpa flag ini.
+   sehingga build akan gagal dengan pesan `nest: not found` tanpa flag ini.
 
-4. **Start Command**: `npm run start:prod`
-5. **Health Check Path**: `/api`
-6. Isi environment variable di atas, dengan `DATABASE_URL` dari langkah 1.
+3. **Start Command**: `npm run start:prod`
+4. **Health Check Path**: `/api`
+
+### Langkah 3 — Environment variables di Render
+
+| Variable         | Nilai                                    | Catatan                                        |
+| ---------------- | ---------------------------------------- | ---------------------------------------------- |
+| `DATABASE_URL`   | Session pooler string dari Supabase      | Bukan yang dari `.env` lokal                    |
+| `JWT_SECRET`     | string acak 48 byte                      | **Jangan** pakai nilai yang sama dengan lokal   |
+| `JWT_EXPIRES_IN` | `7d`                                     |                                                 |
+| `CORS_ORIGIN`    | `https://namadomain-frontend.vercel.app` | URL frontend produksi, bukan `localhost`        |
+| `NODE_ENV`       | `production`                             | Mengaktifkan pengaman seed, `trust proxy`, dan pemeriksaan CORS |
+
+Opsional, hanya kalau ingin menyetel sendiri batas laju request:
+`THROTTLE_LIMIT` (umum, default 120/menit) dan `AUTH_THROTTLE_LIMIT`
+(login & register, default 10/menit).
+
+Buat `JWT_SECRET` baru dengan:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+```
+
+**`PORT` jangan diisi.** Render menyuntikkannya sendiri dan aplikasi sudah membaca
+`process.env.PORT`. Kalau dipaksa diisi, Render tidak menemukan service-nya dan deploy
+dianggap gagal.
+
+**`ALLOW_PRODUCTION_SEED` jangan pernah disetel di Render.** Variabel itu satu-satunya cara
+menembus pengaman yang mencegah seed menghapus seluruh data produksi.
 
 ### Kenapa `prisma` ada di `dependencies`, bukan `devDependencies`
 
-Kedua platform membuang `devDependencies` setelah build selesai. Karena `npm run start:prod`
+Render membuang `devDependencies` setelah build selesai. Karena `npm run start:prod`
 menjalankan `prisma migrate deploy` **saat aplikasi menyala**, paket `prisma` harus ikut
 terpasang di runtime — kalau tidak, server gagal start.
 
-### Setelah deploy pertama
+## Langkah setelah deploy berhasil
 
-Database produksi akan kosong (migrasi hanya membuat tabel, tidak mengisi data). Buat akun
-admin pertama secara manual, misalnya lewat `psql` dengan password yang sudah di-hash bcrypt,
-atau sementara jalankan seed sekali dengan `ALLOW_PRODUCTION_SEED=true` **selagi database
-masih kosong** — lalu segera ganti password akun adminnya.
+Deploy hijau di Render **belum berarti aplikasinya siap dipakai**. Database masih kosong,
+belum ada akun admin, dan frontend belum tentu bisa menghubunginya. Kerjakan tujuh langkah
+berikut berurutan.
+
+Ganti `<APP>` dengan nama service Render-mu, misalnya `hadish-cake-api`.
+
+### 1. Pastikan servernya benar-benar hidup
+
+```bash
+curl https://<APP>.onrender.com/api
+```
+
+Yang diharapkan:
+
+```json
+{ "status": "ok", "service": "Hadish Cake API", "timestamp": "..." }
+```
+
+Kalau balasannya HTML halaman error Render, buka tab **Logs** di dashboard. Penyebab
+tersering ada di bagian [Kalau gagal](#kalau-gagal) di bawah.
+
+### 2. Pastikan tabelnya sudah terbentuk
+
+`npm run start:prod` menjalankan `prisma migrate deploy` sebelum server menyala, jadi tabel
+seharusnya sudah ada. Buka **Table Editor** di Supabase dan pastikan ada enam tabel:
+
+```
+users   categories   products   orders   order_items   _prisma_migrations
+```
+
+`_prisma_migrations` adalah catatan Prisma tentang migrasi mana saja yang sudah diterapkan.
+Kalau tabel-tabel ini belum ada, berarti langkah migrasi gagal — cek Logs, jangan lanjut.
+
+### 3. Isi data awal
+
+Database masih benar-benar kosong. Jalankan seed **sekali** dari laptopmu, mengarah ke
+database produksi:
+
+```bash
+DATABASE_URL="<connection-string-supabase>" ALLOW_PRODUCTION_SEED=true npm run db:seed
+```
+
+Ini mengisi 4 kategori, 10 menu, 4 akun, dan 5 contoh order.
+
+> **Perintah ini menghapus seluruh isi database lebih dulu.** Aman sekarang karena masih
+> kosong, tapi **jangan pernah dijalankan lagi** setelah ada order sungguhan.
+
+Kalau kamu tidak ingin ada akun dan order contoh di produksi, hapus setelahnya — menu dan
+kategori tetap utuh:
+
+```sql
+-- Jalankan di SQL Editor Supabase.
+DELETE FROM users WHERE email IN (
+  'siti@example.com', 'budi@example.com', 'dewi@example.com'
+);
+```
+
+Order milik mereka ikut terhapus otomatis lewat `onDelete: Cascade`.
+
+### 4. Ganti password admin
+
+**Wajib.** Password `Admin123!` tertulis di README ini, jadi siapa pun yang melihat repomu
+bisa masuk sebagai admin.
+
+Saat ini **belum ada endpoint ganti password**, jadi lakukan langsung di database.
+
+Pertama, buat hash dari password barumu di laptop:
+
+```bash
+node -e "console.log(require('bcrypt').hashSync('PasswordBaruKamu', 10))"
+```
+
+Hasilnya seperti `$2b$10$YMeXwyHNoimEu0xIcStEo...` (60 karakter). Lalu di **SQL Editor**
+Supabase:
+
+```sql
+UPDATE users
+SET password = '<tempel-hash-di-sini>'
+WHERE email = 'admin@hadishcake.com';
+```
+
+Sekalian ganti emailnya kalau mau:
+
+```sql
+UPDATE users
+SET email = 'emailkamu@gmail.com'
+WHERE email = 'admin@hadishcake.com';
+```
+
+Email wajib huruf kecil semua — ada CHECK constraint yang menolak huruf kapital. Begitu juga
+password: kalau kamu isi teks biasa (bukan hash), database akan menolaknya.
+
+Terakhir, pastikan password barunya benar-benar bekerja:
+
+```bash
+curl -X POST https://<APP>.onrender.com/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@hadishcake.com","password":"PasswordBaruKamu"}'
+```
+
+Harus membalas `accessToken`. Kalau `401`, hash-nya belum tersimpan dengan benar.
+
+### 5. Smoke test API produksi
+
+Uji jalur terpenting secara manual:
+
+```bash
+API=https://<APP>.onrender.com/api
+
+# a. Katalog bisa dibaca tanpa login
+curl "$API/products?bestSeller=true"
+
+# b. Customer baru bisa mendaftar
+curl -X POST $API/auth/register -H "Content-Type: application/json" \
+  -d '{"name":"Uji Coba","email":"uji@example.com","password":"Rahasia123"}'
+
+# c. Endpoint admin menolak token customer (harus 403)
+# d. Order untuk hari ini ditolak (harus 400)
+```
+
+> **Jangan jalankan seluruh koleksi Postman ke produksi.** Koleksi itu berisi request yang
+> **membuat dan menghapus** menu, kategori, dan order — termasuk `DELETE`. Koleksi itu untuk
+> database lokal. Untuk produksi, cukup smoke test manual seperti di atas.
+
+### 6. Hubungkan frontend
+
+Setelah frontend Next.js di-deploy, isi `CORS_ORIGIN` di Render dengan URL frontend
+produksinya (tanpa garis miring di akhir):
+
+```
+CORS_ORIGIN=https://hadish-cake.vercel.app
+```
+
+Render otomatis me-restart service setiap kali environment variable diubah.
+
+Selama ini belum benar, frontend produksi akan gagal memanggil API dengan error CORS di
+console browser — padahal API-nya sendiri sehat kalau diakses lewat `curl`. Gejala itu
+hampir selalu berarti `CORS_ORIGIN` salah atau masih `localhost`.
+
+### 7. Ketahui perilaku free tier
+
+- **Service tidur saat idle.** Request pertama setelah lama menganggur butuh beberapa detik
+  untuk membangunkan container. Kalau backend ini akan dinilai dosen atau mentor, pancing
+  dulu satu request beberapa menit sebelum demo.
+- **Logs ada di tab Logs** dashboard Render — di situlah error `5xx` dari
+  `AllExceptionsFilter` tercatat lengkap dengan stack trace.
+
+### Deploy pembaruan berikutnya
+
+Cukup `git push` ke branch yang terhubung. Render otomatis build dan deploy ulang.
+
+Kalau pembaruan itu mengandung migrasi baru, migrasinya **diterapkan otomatis** saat start
+oleh `prisma migrate deploy` — kamu tidak perlu melakukan apa pun secara manual, dan data
+lama tidak akan hilang.
+
+### Kalau gagal
+
+| Gejala di Logs                        | Penyebab paling mungkin                                               |
+| ------------------------------------- | --------------------------------------------------------------------- |
+| `nest: not found`                     | Build Command belum memakai `npm ci --include=dev`                      |
+| Error koneksi saat `migrate deploy`   | `DATABASE_URL` salah, kurang `sslmode=require`, atau password belum di-URL-encode |
+| `prisma: not found`                   | Paket `prisma` tidak ada di `dependencies`                              |
+| Port scan timeout / service unhealthy | `PORT` diisi manual — kosongkan, biar Render yang mengisi              |
+| `Can't reach database server`         | Memakai Direct connection (IPv6). Ganti ke **Session pooler**          |
 
 ---
 

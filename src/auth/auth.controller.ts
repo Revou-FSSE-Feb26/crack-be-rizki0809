@@ -1,4 +1,9 @@
 import { Body, Controller, Get, HttpCode, Post } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import {
+  AUTH_THROTTLE_LIMIT,
+  THROTTLE_TTL_MS,
+} from '../common/throttle.config';
 import { AuthService } from './auth.service';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
@@ -6,6 +11,13 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import type { AuthUser } from './types/jwt-payload.type';
 
+/**
+ * Register dan login dibatasi jauh lebih ketat daripada endpoint lain, karena
+ * keduanya bisa dipakai menebak password atau membuat akun secara massal.
+ */
+@Throttle({
+  default: { limit: AUTH_THROTTLE_LIMIT, ttl: THROTTLE_TTL_MS },
+})
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
