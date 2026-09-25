@@ -76,6 +76,21 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return this.describePrismaError(exception);
     }
 
+    // Gagal menyambung ke database sama sekali: DATABASE_URL salah, password
+    // belum di-URL-encode, kurang sslmode, atau memakai connection string
+    // yang tidak bisa dijangkau dari hosting.
+    if (exception instanceof Prisma.PrismaClientInitializationError) {
+      this.logger.error(
+        `Tidak bisa terhubung ke database (${exception.errorCode ?? 'tanpa kode'}). ` +
+          `Periksa DATABASE_URL. Detail: ${exception.message}`,
+      );
+      return {
+        status: HttpStatus.SERVICE_UNAVAILABLE,
+        error: 'Service Unavailable',
+        message: 'Server belum bisa terhubung ke database. Coba lagi nanti.',
+      };
+    }
+
     if (exception instanceof Prisma.PrismaClientValidationError) {
       return {
         status: HttpStatus.BAD_REQUEST,
@@ -122,6 +137,25 @@ export class AllExceptionsFilter implements ExceptionFilter {
     exception: Prisma.PrismaClientKnownRequestError,
   ): DescribedError {
     switch (exception.code) {
+      // Kode P1xxx berarti masalah koneksi ke database, bukan kesalahan
+      // pengirim request. Membalasnya sebagai 4xx akan menyesatkan: pengguna
+      // mengira inputnya salah, padahal servernya yang belum nyambung.
+      case 'P1000': // autentikasi database ditolak
+      case 'P1001': // server database tidak terjangkau
+      case 'P1002': // server database tidak menjawab tepat waktu
+      case 'P1011': // gagal membuka koneksi TLS
+      case 'P1017': // koneksi ditutup sepihak oleh server
+        this.logger.error(
+          `Gagal terhubung ke database (${exception.code}). ` +
+            'Periksa DATABASE_URL: host, kredensial, dan pengaturan sslmode. ' +
+            `Detail: ${exception.message}`,
+        );
+        return {
+          status: HttpStatus.SERVICE_UNAVAILABLE,
+          error: 'Service Unavailable',
+          message: 'Server belum bisa terhubung ke database. Coba lagi nanti.',
+        };
+
       // Melanggar unique constraint.
       case 'P2002': {
         const target = exception.meta?.target;
@@ -158,14 +192,34 @@ export class AllExceptionsFilter implements ExceptionFilter {
           message: 'Nilai yang dikirim terlalu panjang untuk kolomnya',
         };
 
-      default:
-        this.logger.warn(
-          `Kode error Prisma yang belum ditangani khusus: ${exception.code}`,
+      // Tabel atau kolomnya tidak ada. Hampir selalu berarti migrasi belum
+      // dijalankan di database ini, atau DATABASE_URL menunjuk database lain.
+      case 'P2021':
+      case 'P2022':
+        this.logger.error(
+          `Struktur database tidak sesuai (${exception.code}). ` +
+            'Jalankan `prisma migrate deploy`, dan pastikan DATABASE_URL ' +
+            `menunjuk database yang benar. Detail: ${exception.message}`,
         );
         return {
-          status: HttpStatus.BAD_REQUEST,
-          error: 'Bad Request',
-          message: 'Database menolak operasi ini',
+          status: HttpStatus.INTERNAL_SERVER_ERROR,
+          error: 'Internal Server Error',
+          message: 'Server sedang bermasalah. Coba lagi sebentar lagi.',
+        };
+
+      default:
+        // Sengaja dicatat sebagai error, bukan warning: kode yang belum
+        // dikenali berarti ada yang perlu diperiksa, bukan sekadar catatan.
+        this.logger.error(
+          `Kode error Prisma yang belum ditangani khusus: ${exception.code}. ` +
+            `Detail: ${exception.message}`,
+        );
+        // Selama belum jelas ini salah siapa, jangan menyalahkan pengirim
+        // request. 400 membuat masalah server terlihat seperti salah input.
+        return {
+          status: HttpStatus.INTERNAL_SERVER_ERROR,
+          error: 'Internal Server Error',
+          message: 'Server sedang bermasalah. Coba lagi sebentar lagi.',
         };
     }
   }

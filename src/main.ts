@@ -8,7 +8,7 @@ async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
-  // Di hosting seperti Render, request masuk lewat proxy mereka. Tanpa ini,
+  // Di hosting seperti Railway, request masuk lewat proxy mereka. Tanpa ini,
   // semua pengunjung terbaca beralamat IP yang sama — akibatnya pembatas laju
   // menghitung mereka sebagai satu orang dan saling memblokir.
   //
