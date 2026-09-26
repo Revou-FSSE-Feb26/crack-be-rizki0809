@@ -7,6 +7,11 @@ Customer memesan kue untuk diambil langsung di toko pada tanggal yang dipilih.
 Aturan toko: **booking paling lambat 1 hari sebelum tanggal pengambilan.**
 
 ---
+### Deployment
+
+crack-be-rizki0809-production-9f47.up.railway.app
+
+---
 
 ## Cara menjalankan
 
